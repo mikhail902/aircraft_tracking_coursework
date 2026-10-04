@@ -7,10 +7,30 @@ from typing import List, Optional
 import requests
 
 
+MIN_STATE_LEN = 17
+
+IDX_ICAO24 = 0
+IDX_CALLSIGN = 1
+IDX_ORIGIN_COUNTRY = 2
+IDX_TIME_POSITION = 3
+IDX_LAST_CONTACT = 4
+IDX_LONGITUDE = 5
+IDX_LATITUDE = 6
+IDX_BARO_ALTITUDE = 7
+IDX_ON_GROUND = 8
+IDX_VELOCITY = 9
+IDX_TRUE_TRACK = 10
+IDX_VERTICAL_RATE = 11
+IDX_SENSORS = 12
+IDX_GEO_ALTITUDE = 13
+IDX_SQUAWK = 14
+IDX_SPI = 15
+IDX_POSITION_SOURCE = 16
+IDX_CATEGORY = 17
+
+
 @dataclass
 class AircraftState:
-    """Хранит основные поля state vector воздушного судна."""
-
     icao24: str
     callsign: Optional[str]
     origin_country: Optional[str]
@@ -25,11 +45,10 @@ class AircraftState:
     vertical_rate: Optional[float]
     geo_altitude: Optional[float]
     squawk: Optional[str]
-    category: Optional[int]
+    category: Optional[int] = None
 
 
 class OpenSkyClient:
-    """Получает текущие state vectors из OpenSky."""
 
     def __init__(
         self,
@@ -39,7 +58,6 @@ class OpenSkyClient:
         token_url: str = "",
         timeout: int = 30,
     ) -> None:
-        """Инициализирует OpenSky-клиент и параметры OAuth2."""
         self.api_url = api_url.rstrip("/")
         self.client_id = client_id
         self.client_secret = client_secret
@@ -50,7 +68,6 @@ class OpenSkyClient:
         self._token_expires_at: Optional[datetime] = None
 
     def _get_token(self) -> Optional[str]:
-        """Получает или обновляет OAuth2 access token."""
         if not (self.client_id and self.client_secret and self.token_url):
             return None
 
@@ -82,9 +99,49 @@ class OpenSkyClient:
         return self._token
 
     def _headers(self) -> dict:
-        """Возвращает HTTP-заголовки с актуальным Bearer token."""
         token = self._get_token()
         return {"Authorization": f"Bearer {token}"} if token else {}
+
+    @staticmethod
+    def _parse_state(state: list) -> Optional[AircraftState]:
+        if not state or len(state) < MIN_STATE_LEN:
+            return None
+
+        icao24_raw = state[IDX_ICAO24]
+        icao24 = (icao24_raw or "").strip().lower()
+        if not icao24:
+            return None
+
+        callsign_raw = state[IDX_CALLSIGN]
+        callsign = (
+            callsign_raw.strip() or None
+            if isinstance(callsign_raw, str)
+            else None
+        )
+
+        category = (
+            state[IDX_CATEGORY]
+            if len(state) > IDX_CATEGORY
+            else None
+        )
+
+        return AircraftState(
+            icao24=icao24,
+            callsign=callsign,
+            origin_country=state[IDX_ORIGIN_COUNTRY],
+            time_position=state[IDX_TIME_POSITION],
+            last_contact=state[IDX_LAST_CONTACT],
+            longitude=state[IDX_LONGITUDE],
+            latitude=state[IDX_LATITUDE],
+            baro_altitude=state[IDX_BARO_ALTITUDE],
+            on_ground=state[IDX_ON_GROUND],
+            velocity=state[IDX_VELOCITY],
+            true_track=state[IDX_TRUE_TRACK],
+            vertical_rate=state[IDX_VERTICAL_RATE],
+            geo_altitude=state[IDX_GEO_ALTITUDE],
+            squawk=state[IDX_SQUAWK],
+            category=category,
+        )
 
     def get_states(
         self,
@@ -93,7 +150,6 @@ class OpenSkyClient:
         north: float,
         east: float,
     ) -> List[AircraftState]:
-        """Получает воздушные суда в заданном bounding box."""
         response = self.session.get(
             f"{self.api_url}/states/all",
             params={
@@ -110,25 +166,8 @@ class OpenSkyClient:
 
         result: List[AircraftState] = []
         for state in payload.get("states") or []:
-            # Индексы соответствуют state vector OpenSky.
-            result.append(
-                AircraftState(
-                    icao24=(state[0] or "").lower(),
-                    callsign=state[1].strip() if state[1] else None,
-                    origin_country=state[2],
-                    time_position=state[3],
-                    last_contact=state[4],
-                    longitude=state[5],
-                    latitude=state[6],
-                    baro_altitude=state[7],
-                    on_ground=state[8],
-                    velocity=state[9],
-                    true_track=state[10],
-                    vertical_rate=state[11],
-                    geo_altitude=state[13],
-                    squawk=state[14],
-                    category=state[17],
-                )
-            )
+            parsed = self._parse_state(state)
+            if parsed is not None:
+                result.append(parsed)
 
-        return [item for item in result if item.icao24]
+        return result
